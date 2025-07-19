@@ -6,6 +6,7 @@ import sys
 import visdom
 import torch
 import pickle
+import numpy as np
 
 from collections import OrderedDict
 from tqdm import tqdm
@@ -18,10 +19,10 @@ from loader import *
 from model import BiLSTM_CRF
 
 optparser = optparse.OptionParser()
-optparser.add_option("-T", "--train", default="data/eng.train", help="Train set location")
-optparser.add_option("-d", "--dev", default="data/eng.testa", help="Dev set location")
-optparser.add_option("-t", "--test", default="data/eng.testb", help="Test set location")
-optparser.add_option("--test_train", default="data/eng.train50000", help="test train")
+optparser.add_option("-T", "--train", default="data/train.csv", help="Train set location")
+optparser.add_option("-d", "--dev", default="data/dev.csv", help="Dev set location")
+optparser.add_option("-t", "--test", default="data/test.csv", help="Test set location")
+optparser.add_option("--test_train", default="data/dev.csv", help="test train")
 optparser.add_option("--score", default="evaluation/temp/score.txt", help="score file location")
 optparser.add_option("-s", "--tag_scheme", default="iobes", help="Tagging scheme (IOB or IOBES)")
 optparser.add_option(
@@ -111,6 +112,7 @@ parameters["name"] = opts.name
 parameters["char_mode"] = opts.char_mode
 parameters["use_gpu"] = opts.use_gpu == 1 and torch.cuda.is_available()
 
+print(f"Cuda Available: {torch.cuda.is_available()}")
 use_gpu = parameters["use_gpu"]
 device = torch.device("cuda" if use_gpu else "cpu")
 
@@ -120,65 +122,11 @@ models_path = "models/"
 model_name = models_path + name  # get_name(parameters)
 tmp_model = model_name + ".tmp"
 
-
-# def evaluating_with_sklearn(model, datas, best_F=0):
-#     # FB1 on word level
-#     save = False
-#     new_F = 0.0
-#     gold_tag_id = []
-#     pred_tag_id = []
-#     for data in datas:
-#         gold_tag_id.extend(data["tags"])  # [tad_id]
-#         chars = data["chars"]  # [[char_id]]
-#         caps = data["caps"]  # [cap_feat_id]
-
-#         if parameters["char_mode"] == "LSTM":
-#             chars_sorted = sorted(chars, key=lambda p: len(p), reverse=True)
-#             d = {}
-#             for i, ci in enumerate(chars):
-#                 for j, cj in enumerate(chars_sorted):
-#                     if ci == cj and not j in d and not i in d.values():
-#                         d[j] = i
-#                         continue
-#             chars_length = [len(c) for c in chars_sorted]
-#             char_maxl = max(chars_length)
-#             chars_mask = np.zeros((len(chars_sorted), char_maxl), dtype="int")
-#             for i, c in enumerate(chars_sorted):
-#                 chars_mask[i, :chars_length[i]] = c
-#             chars_mask = Variable(torch.LongTensor(chars_mask))
-
-#         if parameters["char_mode"] == "CNN":
-#             d = {}
-#             chars_length = [len(c) for c in chars]
-#             char_maxl = max(chars_length)
-#             chars_mask = np.zeros((len(chars_length), char_maxl), dtype="int")
-#             for i, c in enumerate(chars):
-#                 chars_mask[i, :chars_length[i]] = c
-#             chars_mask = Variable(torch.LongTensor(chars_mask))
-
-#         dwords = Variable(torch.LongTensor(data["words"]))
-#         dcaps = Variable(torch.LongTensor(caps))
-#         if use_gpu:
-#             val, out = model(dwords.cuda(), chars_mask.cuda(), dcaps.cuda(), chars_length, d)
-#         else:
-#             val, out = model(dwords, chars_mask, dcaps, chars_length, d)
-#         pred_tag_id.extend(out)
-
-#     tag_ids = list(id_to_tag.keys())[:-2]  # ignore <start> and <stop>
-#     tags = list(id_to_tag.values())[:-2]
-#     print(classification_report(gold_tag_id, pred_tag_id, labels=tag_ids[0:], target_names=tags[0:], digits=4))
-#     print(confusion_matrix(gold_tag_id, pred_tag_id, labels=tag_ids))
-#     new_F = f1_score(gold_tag_id, pred_tag_id, average="micro")
-#     print()
-#     if new_F > best_F:
-#         best_F = new_F
-#         save = True
-#         print(f"the best F is {best_F} \n\n")
-#     return best_F, new_F, save
-
 def evaluating(model, datas, best_F):
     # FB1 on pharse level
     prediction = []
+    true_tags = []
+    pred_tags = []
     save = False
     new_F = 0.0
     confusion_matrix = torch.zeros((len(tag_to_id) - 2, len(tag_to_id) - 2))
@@ -220,29 +168,30 @@ def evaluating(model, datas, best_F):
         else:
             val, out = model(dwords, chars2_mask, dcaps, chars2_length, d)
         predicted_id = out
+
+        true_tags.extend([id_to_tag[i] for i in ground_truth_id])
+        pred_tags.extend([id_to_tag[i] for i in out])
+
         for (word, true_id, pred_id) in zip(words, ground_truth_id, predicted_id):
             line = ' '.join([word, id_to_tag[true_id], id_to_tag[pred_id]])
             prediction.append(line)
             confusion_matrix[true_id, pred_id] += 1
         prediction.append('')
+
     predf = eval_temp + '/pred.' + name
     scoref = eval_temp + '/score.' + name
 
-    with open(predf, 'w') as f:
+    with open(predf, 'w',  encoding='UTF-8') as f:
         f.write('\n'.join(prediction))
 
-    os.system('%s < %s > %s' % (eval_script, predf, scoref))
+    # os.system('%s < %s > %s' % (eval_script, predf, scoref))
 
-    eval_lines = [l.rstrip() for l in open(scoref, 'r', encoding='utf8')]
-
-    for i, line in enumerate(eval_lines):
-        print(line)
-        if i == 1:
-            new_F = float(line.strip().split()[-1])
-            if new_F > best_F:
-                best_F = new_F
-                save = True
-                print('the best F is ', new_F)
+    print(classification_report(true_tags, pred_tags, labels=["C", "N"]))
+    new_F = f1_score(true_tags, pred_tags, average='macro')
+    if new_F > best_F:
+        best_F = new_F
+        save = True
+        print('the best F is ', new_F)
 
     print(("{: >2}{: >7}{: >7}%s{: >9}" % ("{: >7}" * confusion_matrix.size(0))).format(
         "ID", "NE", "Total",
@@ -260,6 +209,7 @@ def evaluating(model, datas, best_F):
 
 
 def train():
+    epoch = 7
     learning_rate = 0.015
     optimizer = torch.optim.SGD(model.parameters(), lr=learning_rate, momentum=0.9)
     losses = []
@@ -276,7 +226,7 @@ def train():
 
     model.train(True)
 
-    for epoch in range(1, 10001):
+    for epoch in range(0, epoch):
         for iter, index in enumerate(tqdm(np.random.permutation(len(train_data)))):
             data = train_data[index]
             model.zero_grad()
@@ -408,10 +358,12 @@ if __name__ == "__main__":
     test_sentences = loader.load_sentences(opts.test, lower, zeros)
     test_train_sentences = loader.load_sentences(opts.test_train, lower, zeros)
 
-    update_tag_scheme(train_sentences, tag_scheme)
-    update_tag_scheme(dev_sentences, tag_scheme)
-    update_tag_scheme(test_sentences, tag_scheme)
-    update_tag_scheme(test_train_sentences, tag_scheme)
+    # update_tag_scheme(train_sentences, tag_scheme)
+    # update_tag_scheme(dev_sentences, tag_scheme)
+    # update_tag_scheme(test_sentences, tag_scheme)
+    # update_tag_scheme(test_train_sentences, tag_scheme)
+
+    print(test_sentences[0])
 
     dico_words_train = word_mapping(train_sentences, lower)[0]
 

@@ -1,0 +1,7 @@
+matplotlib
+visdom
+torch
+tqdm
+scikit-learn
+pandas
+nltk

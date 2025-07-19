@@ -1,33 +1,65 @@
 import os
 import re
+import pandas as pd
 from utils import create_mapping, zero_digits
 from utils import iob2, iob_iobes
 import model
 from collections import Counter
+import nltk
+from nltk.tokenize import word_tokenize
 
+# nltk.download('all')
 
 def load_sentences(path, lower, zeros):
-    """
-    Load sentences. A line must contain at least a word and its tag.
-    Sentences are separated by empty lines.
-    """
-    sentences = []
-    sentence = []
-    for line in open(path, 'r', encoding='utf-8'):
-        line = zero_digits(line.rstrip()) if zeros else line.rstrip()
-        if not line and len(sentence) > 0:
-            if 'DOCSTART' not in sentence[0][0]:
-                sentences.append(sentence)
-            sentence = []
-        else:
-            word = line.split()
-            assert len(word) >= 2
-            sentence.append(word)
-    if len(sentence) > 0:
-        if 'DOCSTART' not in sentence[0][0]:
-            sentences.append(sentence)
-    return sentences
+    df = pd.read_csv(path)
+    df.groupby("Sentence").apply(lambda x: x.sort_values(by="End"))
 
+    sentences = []
+    sentence = "" # e.g. #12-9 An air ambulance also responded.
+    index = 0
+    word_list = [] # ['#12-9', 'An', 'air', ... , 'responded', '.']
+    label_list = [] # ['N', 'N', 'N', ... , 'C', 'N']
+    num_error = 0
+
+    for _, row in df.iterrows():
+        if sentence != row["Sentence"]:
+            word_list = word_tokenize(sentence) # Split string into words and punctuation. Remove all 's
+            label_list = [label.replace(" ","N") for label in label_list] # Replace empty labels with N
+            concat_list = [[word_list[i], label_list[i]] for i in range(len(word_list))]
+            if len(concat_list) > 0:
+                sentences.append(concat_list)
+
+            # Update sentence, word_list, and label_list for the new set of annotations
+            sentence = zero_digits(row["Sentence"]) if zeros else row["Sentence"]
+            index = 0
+            word_list = word_tokenize(sentence)
+            label_list = [' ' for word in word_list]
+            print(word_list)
+
+        # If the current row contains a multi-word expression, break it into two or more words
+        current_word = str(row["Word"]).split() # ['security', 'reasons']
+        if len(current_word) > 1: # multi-word expression
+            for word in current_word:
+                word = word.replace(",","")
+                try: 
+                    index =  word_list.index(word)
+                    if label_list[index] == '': # the current word is left unannotated by single-word rows e.g. the row containing "security" 
+                        label_list[index] = "C" if row["Complexity_Binary"] == 1 else "N"
+                except:
+                    num_error += 1
+
+        else: 
+            try:
+                index =  word_list.index(current_word[0])
+                label_list[index] = "C" if row["Complexity_Binary"] == 1 else "N"
+            except:
+                num_error += 1
+
+        index += 1
+
+    print(f'Percentage of rows dropped: {num_error / len(df) * 100}')
+
+    return sentences
 
 def update_tag_scheme(sentences, tag_scheme):
     """

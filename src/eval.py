@@ -4,6 +4,7 @@ import torch
 import time
 import pickle
 from torch.autograd import Variable
+from sklearn.metrics import classification_report, f1_score, confusion_matrix
 
 from loader import *
 from utils import *
@@ -13,7 +14,7 @@ from utils import *
 
 optparser = optparse.OptionParser()
 optparser.add_option(
-    "-t", "--test", default="data/eng.testb",
+    "-t", "--test", default="data/test.csv",
     help="Test set location"
 )
 optparser.add_option(
@@ -71,21 +72,25 @@ zeros = parameters['zeros']
 tag_scheme = parameters['tag_scheme']
 
 test_sentences = load_sentences(opts.test, lower, zeros)
-update_tag_scheme(test_sentences, tag_scheme)
+# update_tag_scheme(test_sentences, tag_scheme)
 test_data = prepare_dataset(
     test_sentences, word_to_id, char_to_id, tag_to_id, lower
 )
 
-model = torch.load(opts.model_path)
+model = torch.load(opts.model_path, weights_only=False)
 model_name = opts.model_path.split('/')[-1].split('.')[0]
 
 if use_gpu:
     model.cuda()
 model.eval()
 
-
 def eval(model, datas):
+    # FB1 on pharse level
     prediction = []
+    true_tags = []
+    pred_tags = []
+    save = False
+    new_F = 0.0
     confusion_matrix = torch.zeros((len(tag_to_id) - 2, len(tag_to_id) - 2))
     for data in datas:
         ground_truth_id = data['tags']
@@ -115,31 +120,37 @@ def eval(model, datas):
             chars2_mask = np.zeros((len(chars2_length), char_maxl), dtype='int')
             for i, c in enumerate(chars2):
                 chars2_mask[i, :chars2_length[i]] = c
+
             chars2_mask = Variable(torch.LongTensor(chars2_mask))
 
         dwords = Variable(torch.LongTensor(data['words']))
         dcaps = Variable(torch.LongTensor(caps))
         if use_gpu:
-            val, out = model(dwords.cuda(), chars2_mask.cuda(), dcaps.cuda(),chars2_length, d)
+            val, out = model(dwords.cuda(), chars2_mask.cuda(), dcaps.cuda(), chars2_length, d)
         else:
             val, out = model(dwords, chars2_mask, dcaps, chars2_length, d)
         predicted_id = out
+
+        true_tags.extend([id_to_tag[i] for i in ground_truth_id])
+        pred_tags.extend([id_to_tag[i] for i in out])
+
         for (word, true_id, pred_id) in zip(words, ground_truth_id, predicted_id):
             line = ' '.join([word, id_to_tag[true_id], id_to_tag[pred_id]])
             prediction.append(line)
             confusion_matrix[true_id, pred_id] += 1
         prediction.append('')
+
     predf = eval_temp + '/pred.' + model_name
     scoref = eval_temp + '/score.' + model_name
 
-    with open(predf, 'w') as f:
+    with open(predf, 'w',  encoding='UTF-8') as f:
         f.write('\n'.join(prediction))
 
-    os.system('%s < %s > %s' % (eval_script, predf, scoref))
+    # os.system('%s < %s > %s' % (eval_script, predf, scoref))
 
-    with open(scoref, 'r') as f:
-        for l in f.readlines():
-            print(l.strip())
+    print(classification_report(true_tags, pred_tags, labels=["C", "N"]))
+    new_F = f1_score(true_tags, pred_tags, average='macro')
+    print('Macro F1-Score is ', new_F)
 
     print(("{: >2}{: >7}{: >7}%s{: >9}" % ("{: >7}" * confusion_matrix.size(0))).format(
         "ID", "NE", "Total",
@@ -151,6 +162,7 @@ def eval(model, datas):
             *([confusion_matrix[i][j] for j in range(confusion_matrix.size(0))] +
               ["%.3f" % (confusion_matrix[i][i] * 100. / max(1, confusion_matrix[i].sum()))])
         ))
+    print()
 
 t = time.time()
 eval(model, test_data)
