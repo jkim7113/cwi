@@ -210,6 +210,8 @@ class BiLSTM_CRF(nn.Module):
             return scores
 
     def forward(self, sentence, chars, caps, chars2_length, d):
+        self.device = torch.device("cpu")
+        self.use_gpu = False
         feats = self._get_lstm_features(sentence, chars, caps, chars2_length, d)
         # viterbi to get tag_seq
         if self.use_crf:
