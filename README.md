@@ -28,3 +28,6 @@ Confusion Matrix
     <td>83.167</td>
   </tr>
 </table>
+
+# Model Checkpoint
+The checkpoint of this model is available <a href="https://drive.google.com/drive/folders/1m9yWT1sIoR42j32i_51dpTDh5gPP0hS9?usp=sharing">here</a>.
